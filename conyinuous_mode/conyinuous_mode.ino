@@ -87,7 +87,7 @@ void loop()
   read4 = sensor4.readRangeContinuousMillimeters();
   read5 = sensor5.readRangeContinuousMillimeters();
   time = millis() - time;
-  Serial.print(read3);
+  Serial.print(read1);
   if (sensor1.timeoutOccurred()) { Serial.print("TIMEOUT"); }
 
   Serial.println();

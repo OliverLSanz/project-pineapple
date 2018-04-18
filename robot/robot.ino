@@ -2,29 +2,46 @@
 #include <Wire.h>
 #include <VL53L0X.h>
 
-// SENSORS
-#define CNY_UL A0
-#define CNY_UR A1
-#define CNY_DL A2
-#define CNY_DR A3
+// CONFIGURATION
+#define CONSISTENCY_THRESHOLD 1
+#define CONSISTENT_DISTANCE_DIFFERENCE 500
+#define TOP_SPEED 100
+#define CNYTHRESHOLD 700
+#define SEEN 900
+#define FAR 500
+#define NEAR 200
+#define MOTORDELAY 10
+
+// NAMES
+#define LEFT 0
+#define RIGHT 1
+#define NONE 2
+
+// SENSOR PINS
+#define CNY_BL A0
+#define CNY_FL A1
+#define CNY_FR A2
+#define CNY_BR A3
 #define IR_RECEIVER 9
 #define BUTTON 10
+#define DISTSENSOR_L_E 4
+#define DISTSENSOR_FL_E 7
+#define DISTSENSOR_FF_E 2
+#define DISTSENSOR_FR_E 12
+#define DISTSENSOR_R_E 8
 #define DISTSENSOR_SCL A5
 #define DISTSENSOR_SDA A4
-#define DISTSENSOR_L_E 4
-#define DISTSENSOR_FL_E 5
-#define DISTSENSOR_FF_E 6
-#define DISTSENSOR_FR_E 7
-#define DISTSENSOR_R_E 8
 
-// ACTUATORS
+// ACTUATOR PINS
 #define LED 13
-#define MOTORDRIVER_L_EN A7 
-#define MOTORDRIVER_L_N1 2
-#define MOTORDRIVER_L_N2 3
-#define MOTORDRIVER_R_EN A6 
-#define MOTORDRIVER_R_N1 11
-#define MOTORDRIVER_R_N2 12
+#define RIGHT_FORWARD 3
+#define RIGHT_BACKWARD 5
+#define LEFT_FORWARD 11
+#define LEFT_BACKWARD 6
+
+// FREE PINS
+#define FREE_1 A6
+#define FREE_2 A7
 
 // DISTANCE SENSORS
 VL53L0X distSensor_L;
@@ -33,100 +50,82 @@ VL53L0X distSensor_FF;
 VL53L0X distSensor_FR;
 VL53L0X distSensor_R;
 
-// IR REVEIVER
+// IR RECEIVER
 IRrecv irrecv(IR_RECEIVER);
 decode_results results;
 
-// MOTOR CONTROL FUNCTIONS
-void driversOutput(uint8_t l_en, uint8_t l_n1, uint8_t l_n2, uint8_t r_en, uint8_t r_n1, uint8_t r_n2) {
-  analogWrite(MOTORDRIVER_L_EN, l_en);
-  digitalWrite(MOTORDRIVER_L_N1, l_n1);
-  digitalWrite(MOTORDRIVER_L_N2, l_n2);
-  analogWrite(MOTORDRIVER_R_EN, r_en);
-  digitalWrite(MOTORDRIVER_R_N1, r_n1);
-  digitalWrite(MOTORDRIVER_R_N2, r_n2);
-}
+// STATE VARIABLES
+int leftS = 0; 
+int rightS = 0;
+int enemyPosition = NONE;
+int distanceNow[5] = {0, 0, 0, 0, 0};
+int distanceBefore[5] = {0, 0, 0, 0, 0};
+unsigned long consistency[5] = {0, 0, 0, 0, 0}; 
 
-void rest() {
-  driversOutput(0, HIGH, HIGH, 0, HIGH, HIGH);
-}
-
-void forward(uint8_t motors_speed) {
-  driversOutput(motors_speed, HIGH, LOW, motors_speed, LOW, HIGH);
-}
-
-void reverse(uint8_t motors_speed) {
-  driversOutput(motors_speed, LOW, HIGH, motors_speed, HIGH, LOW);
-}
-
-void turnForward(uint8_t left_speed, uint8_t right_speed) {
-  driversOutput(left_speed, HIGH, LOW, right_speed, HIGH, LOW);
-}
-
-void turnReverse(uint8_t left_speed, uint8_t right_speed) {
-  driversOutput(left_speed, LOW, HIGH, right_speed, LOW, HIGH);
-}
-
-void brake() {
-  driversOutput(0, LOW, LOW, 0, LOW, LOW);
+// UTILS
+int i;
+void copy(int* src, int* dst, int len) {
+    memcpy(dst, src, sizeof(src[0])*len);
 }
 
 // SETUP FUNCTIONS
 void distanceSensorsSetup() {
-  Serial.println("Setting up distance sensors");
-  int distanceSensorEnables[5] = { DISTSENSOR_L_E, DISTSENSOR_FL_E,DISTSENSOR_FF_E, DISTSENSOR_FR_E, DISTSENSOR_L_E };
-  VL53L0X distSensors[5] = { distSensor_L, distSensor_FL, distSensor_FF, distSensor_FR, distSensor_R };
-
-  for(int i = 0; i < 5; i++) {
-    pinMode(distanceSensorEnables[i], OUTPUT);
-    digitalWrite(distanceSensorEnables[i], LOW);
-  }
-
+  pinMode(DISTSENSOR_L_E, OUTPUT);
+  pinMode(DISTSENSOR_FL_E, OUTPUT);
+  pinMode(DISTSENSOR_FF_E, OUTPUT);
+  pinMode(DISTSENSOR_FR_E, OUTPUT);
+  pinMode(DISTSENSOR_R_E, OUTPUT);
+  digitalWrite(DISTSENSOR_L_E, LOW);
+  digitalWrite(DISTSENSOR_FL_E, LOW);
+  digitalWrite(DISTSENSOR_FF_E, LOW);
+  digitalWrite(DISTSENSOR_FR_E, LOW);
+  digitalWrite(DISTSENSOR_R_E, LOW);
   delay(500);
-  Serial.println("Begginning Wire");
   Wire.begin();
-  Serial.println("Wire initialised");
 
-  for(int i = 0; i < 5; i++) {
-      pinMode(distanceSensorEnables[i], INPUT);
-      delay(150);
-      Serial.println("Starting ditance sensor");
-      distSensors[i].init(true);
-      Serial.println("Distance sensor started");
-      delay(100);
-      Serial.println("Setting distance sensor address");
-      distSensors[i].setAddress((uint8_t)10+i);
-  }
+  Serial.begin (9600);
+  
+  pinMode(DISTSENSOR_L_E, INPUT);
+  delay(150);
+  distSensor_L.init(true);
+  delay(100);
+  distSensor_L.setAddress((uint8_t)22);
+  distSensor_L.startContinuous();
+  
+  pinMode(DISTSENSOR_FL_E, INPUT);
+  delay(150);
+  distSensor_FL.init(true);
+  delay(100);
+  distSensor_FL.setAddress((uint8_t)23);
+  distSensor_FL.startContinuous();
+  
+  pinMode(DISTSENSOR_FF_E, INPUT);
+  delay(150);
+  distSensor_FF.init(true);
+  delay(100);
+  distSensor_FF.setAddress((uint8_t)24);
+  distSensor_FF.startContinuous();
+
+  pinMode(DISTSENSOR_FR_E, INPUT);
+  delay(150);
+  distSensor_FR.init(true);
+  delay(100);
+  distSensor_FR.setAddress((uint8_t)25);
+  distSensor_FR.startContinuous();
+  
+  pinMode(DISTSENSOR_R_E, INPUT);
+  delay(150);
+  distSensor_R.init(true);
+  delay(100);
+  distSensor_R.setAddress((uint8_t)26);
+  distSensor_R.startContinuous();
 }
 
 void motorsSetup() {
-  pinMode(MOTORDRIVER_L_N1, OUTPUT);
-  pinMode(MOTORDRIVER_L_N2, OUTPUT);
-  pinMode(MOTORDRIVER_R_N1, OUTPUT);
-  pinMode(MOTORDRIVER_R_N2, OUTPUT);
-  rest();
+  setMotorsSpeed(0, 0);
 }
 
 // TEST FUNCTIONS
-void testMotors() {
-  forward(150);
-  delay(1000);
-  rest();
-  delay(1000);
-  reverse(150);
-  delay(1000);
-  rest();
-  delay(5000);
-}
-
-void testIR() {
-  if (irrecv.decode(&results)) {
-    Serial.println(results.value, HEX);
-    irrecv.resume(); // Receive the next value
-  }
-  delay(100);
-}
-
 void testLED() {
   digitalWrite(LED, HIGH);
   delay(1000);
@@ -141,14 +140,14 @@ void testButton() {
 
 void testDistanceSensor() {
     // Distance sensors test
-  int read1 = distSensor_L.readRangeSingleMillimeters();
-  int read2 = distSensor_FL.readRangeSingleMillimeters();
-  int read3 = distSensor_FF.readRangeSingleMillimeters();
-  int read4 = distSensor_FR.readRangeSingleMillimeters();
-  int read5 = distSensor_R.readRangeSingleMillimeters();
+  int read1 = distSensor_L.readRangeContinuousMillimeters();
+  int read2 = distSensor_FL.readRangeContinuousMillimeters();
+  int read3 = distSensor_FF.readRangeContinuousMillimeters();
+  int read4 = distSensor_FR.readRangeContinuousMillimeters();
+  int read5 = distSensor_R.readRangeContinuousMillimeters();
 
   int THRESHOLD = 500;
-  bool USETHRESHOLD = 1;
+  bool USETHRESHOLD = 0;
   if(USETHRESHOLD){
     bool t1 = read1 < THRESHOLD;
     bool t2 = read2 < THRESHOLD;
@@ -186,10 +185,10 @@ void testDistanceSensor() {
 }
 
 void testCNYs() {
-  int readcny1 = analogRead(CNY_UL);
-  int readcny2 = analogRead(CNY_UR);
-  int readcny3 = analogRead(CNY_DL);
-  int readcny4 = analogRead(CNY_DR);
+  int readcny1 = analogRead(CNY_FL);
+  int readcny2 = analogRead(CNY_FR);
+  int readcny3 = analogRead(CNY_BL);
+  int readcny4 = analogRead(CNY_BR);
   Serial.print(readcny1);
   Serial.print(" -- ");
   Serial.print(readcny2);
@@ -200,30 +199,157 @@ void testCNYs() {
   Serial.println("");
 }
 
+// MOTOR CONTROL FUNCTIONS
+void setMotorsSpeed(int left, int right) {
+  if(right < 0){
+    analogWrite(RIGHT_FORWARD, 0);
+  }else{
+    analogWrite(RIGHT_BACKWARD, 0);
+  }
+
+  if(left < 0){
+    analogWrite(LEFT_FORWARD, 0);
+  }else{
+    analogWrite(LEFT_BACKWARD, 0);
+  }
+
+  delay(MOTORDELAY);
+
+  if(right < 0){
+    analogWrite(RIGHT_BACKWARD, abs(right));
+  }else{
+    analogWrite(RIGHT_FORWARD, right);
+  }
+
+  if(left < 0){
+    analogWrite(LEFT_BACKWARD, abs(left));
+  }else{
+    analogWrite(LEFT_FORWARD, left);
+  }
+
+  rightS = right;
+  leftS = left;
+}
+
+// SENSOR FUNCTIONS
+void checkIR() {
+  if (irrecv.decode(&results)) {
+    if(results.value == 0xF62 || results.value == 0x762) {
+      setMotorsSpeed(0, 0);
+      while(true) delay(1000);
+    }
+    irrecv.resume(); // Receive the next value
+  }
+}
+
+bool cnySeesWhite(uint8_t CNY) {
+   int r = analogRead(CNY);
+   if (r >= CNYTHRESHOLD){
+    return true;
+   }
+   return false;  
+}
+
+void updateDistances(){
+  copy(distanceNow, distanceBefore, 5);
+  
+  distanceNow[0] = distSensor_L.readRangeContinuousMillimeters();
+  distanceNow[1] = distSensor_FL.readRangeContinuousMillimeters();
+  distanceNow[2] = distSensor_FF.readRangeContinuousMillimeters();
+  distanceNow[3] = distSensor_FR.readRangeContinuousMillimeters();
+  distanceNow[4] = distSensor_R.readRangeContinuousMillimeters();
+
+  for(i = 0; i < 5; i++){
+    if(distanceNow[i] < SEEN
+    && distanceNow[i] < distanceBefore[i] + CONSISTENT_DISTANCE_DIFFERENCE
+    && distanceNow[i] > distanceBefore[i] - CONSISTENT_DISTANCE_DIFFERENCE)
+      consistency[i] += 1;
+    else
+      consistency[i] = 0;
+  }
+}
+
 // SETUP
 void setup() {
   // Setups
-  Serial.begin(9600);            // Serial setup
-  pinMode(LED, OUTPUT);          // Led setup
-  pinMode(BUTTON, INPUT_PULLUP); // Button setup
-  irrecv.enableIRIn();           // IR reveiver setup
-  //distanceSensorsSetup();
+  Serial.begin(9600);
+  pinMode(LED, OUTPUT);
+  pinMode(BUTTON, INPUT_PULLUP);
+  irrecv.enableIRIn();
+  distanceSensorsSetup();
   motorsSetup();
   
   // Wait for the Ready Player One button to be pressed
-//  while(digitalRead(BUTTON) == HIGH){
-//    delay(10);
-//  }
-  
-  // Wait n secs for the combat to begin
-//  delay(3000);
-  
-  // FIGHT!!
+  digitalWrite(LED, HIGH);
+  while(digitalRead(BUTTON) == HIGH){
+    delay(10);
+  }
+  digitalWrite(LED, LOW); 
+  delay(1000);
+
+  // INITIAL STATE
+  setMotorsSpeed(0, 0);
 }
 
+bool seen;
 // LOOP
 void loop() {
-  testMotors();
-  // Check sensors and set up the necessary flags
-  // Act in consecuence of flags and current state
+  checkIR();
+  updateDistances();
+  seen = false;
+  if(leftS > 0 && rightS > 0 && (cnySeesWhite(CNY_FL) || cnySeesWhite(CNY_FR))){
+    setMotorsSpeed(-60, -60);
+  }else if(leftS < 0 && rightS < 0 && (cnySeesWhite(CNY_BL) || cnySeesWhite(CNY_BR))){
+    setMotorsSpeed(60, 60);
+  }else if(distanceNow[2] < SEEN && consistency[2] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(0, 0);
+    seen = true;
+    enemyPosition = NONE;
+  }else if(distanceNow[1] < NEAR && consistency[1] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
+    enemyPosition = LEFT;
+  }else if(distanceNow[1] < FAR && consistency[1] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED*0.75, TOP_SPEED*0.75);
+    enemyPosition = LEFT;
+  }else if(distanceNow[1] < SEEN && consistency[1] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED/2, TOP_SPEED/2);
+    enemyPosition = LEFT;
+  }else if(distanceNow[3] < NEAR && consistency[3] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[3] < FAR && consistency[3] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED*0.75, -TOP_SPEED*0.75);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[3] < SEEN && consistency[3] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED/2, -TOP_SPEED/2);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[4] < NEAR && consistency[4] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[4] < FAR && consistency[4] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[4] < SEEN && consistency[4] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
+    enemyPosition = RIGHT;
+  }else if(distanceNow[0] < NEAR && consistency[0] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
+    enemyPosition = LEFT;
+  }else if(distanceNow[0] < FAR && consistency[0] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
+    enemyPosition = LEFT;
+  }else if(distanceNow[0] < SEEN && consistency[0] > CONSISTENCY_THRESHOLD){
+    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
+    enemyPosition = LEFT;
+  }else if(enemyPosition == RIGHT){
+    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
+  }else if(enemyPosition == LEFT){
+    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
+  }
+
+  if(seen){
+    digitalWrite(LED, HIGH);
+  }else{
+    digitalWrite(LED, LOW);
+  }
 }

@@ -1,36 +1,38 @@
 #include <Wire.h>
 #include <VL53L0X.h>
 
+#define DISTSENSOR_L_E 4
+#define DISTSENSOR_FL_E A6
+#define DISTSENSOR_FF_E A7
+#define DISTSENSOR_FR_E 7
+#define DISTSENSOR_R_E 8
+
 VL53L0X sensor;
-VL53L0X sensor2;
 
 void setup()
 {
-
-  pinMode(5, OUTPUT);
-  pinMode(4, OUTPUT);
-  digitalWrite(4, LOW);
-  digitalWrite(5, LOW);
+  pinMode(DISTSENSOR_L_E, OUTPUT);
+  pinMode(DISTSENSOR_FL_E, INPUT);
+  pinMode(DISTSENSOR_FF_E, INPUT);
+  pinMode(DISTSENSOR_FR_E, OUTPUT);
+  pinMode(DISTSENSOR_R_E, OUTPUT);
+  digitalWrite(DISTSENSOR_L_E, LOW);
+  digitalWrite(DISTSENSOR_FR_E, LOW);
+  digitalWrite(DISTSENSOR_R_E, LOW);
+  
 
   delay(500);
   Wire.begin();
 
   Serial.begin (9600);
-
-  pinMode(4, INPUT);
   delay(150);
   Serial.println("trying to init");
   sensor.init(true);
-  Serial.println("init1");
+  Serial.println("done");
 
   delay(100);
-  sensor.setAddress((uint8_t)22);
+  sensor.setAddress((uint8_t)23);
 
-  pinMode(5, INPUT);
-    delay(150);
-  sensor2.init(true);
-  delay(100);
-  sensor2.setAddress((uint8_t)25);
 
   Serial.println("addresses set");
 
@@ -40,14 +42,9 @@ void setup()
 
 void loop()
 {
-  int read1 = sensor.readRangeSingleMillimeters();
-  int read2 = sensor2.readRangeSingleMillimeters();
-
- // Serial.print("Readings: ");
- // Serial.print(read1);
- // Serial.print(" -- ");
-  Serial.print(read2);
-  if (sensor.timeoutOccurred() || sensor2.timeoutOccurred()) { Serial.print(" TIMEOUT"); }
+  int distread = sensor.readRangeSingleMillimeters();
+  Serial.print(distread);
+  if (sensor.timeoutOccurred()) { Serial.print(" TIMEOUT"); }
 
   Serial.println();
 }
