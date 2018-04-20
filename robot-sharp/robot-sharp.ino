@@ -1,19 +1,20 @@
 #include <IRremote.h>
 #include <Wire.h>
-#include <SharpDistSensor.h>
+#include <SharpIR.h>
+#include "FastRunningMedian.h"
 
 // CONFIGURATION
-#define CONSISTENCY_THRESHOLD 1
-#define CONSISTENT_DISTANCE_DIFFERENCE 500
+#define CONSISTENCY_THRESHOLD 7
 #define TOP_SPEED 100
-#define CNYTHRESHOLD 700
+#define CNYTHRESHOLD 500
 #define MOTORDELAY 10
-#define SHARP_WINDOW_SIZE 5
+#define SHARP_WINDOW_SIZE 3
+#define SEEN 70
 
 // NAMES
 #define LEFT 0
 #define RIGHT 1
-#define NONE 2
+#define FRONT 2
 
 // SENSOR PINS
 #define CNY_BL A0
@@ -22,10 +23,10 @@
 #define CNY_BR A3
 #define IR_RECEIVER 9
 #define BUTTON 10
-#define SHARP_L A5 
-#define SHARP_FL A4
-#define SHARP_FR A7
-#define SHARP_R A6
+#define SHARP_L A6 
+#define SHARP_FL A7
+#define SHARP_FR A4
+#define SHARP_R A5
  
 // ACTUATOR PINS
 #define LED 13
@@ -35,10 +36,14 @@
 #define LEFT_BACKWARD 6
 
 // DISTANCE SENSORS
-SharpDistSensor sharp_L(SHARP_L, SHARP_WINDOW_SIZE);
-SharpDistSensor sharp_FL(SHARP_FL, SHARP_WINDOW_SIZE);
-SharpDistSensor sharp_FR(SHARP_FR, SHARP_WINDOW_SIZE);
-SharpDistSensor sharp_R(SHARP_R, SHARP_WINDOW_SIZE);
+SharpIR sharp_L(GP2Y0A21YK0F, SHARP_L);
+SharpIR sharp_FL(GP2Y0A21YK0F, SHARP_FL);
+SharpIR sharp_FR(GP2Y0A21YK0F, SHARP_FR);
+SharpIR sharp_R(GP2Y0A21YK0F, SHARP_R);
+FastRunningMedian<unsigned int, SHARP_WINDOW_SIZE, 81> median_L;
+FastRunningMedian<unsigned int, SHARP_WINDOW_SIZE, 81> median_FL;
+FastRunningMedian<unsigned int, SHARP_WINDOW_SIZE, 81> median_FR;
+FastRunningMedian<unsigned int, SHARP_WINDOW_SIZE, 81> median_R;
 
 // IR RECEIVER
 IRrecv irrecv(IR_RECEIVER);
@@ -47,16 +52,33 @@ decode_results results;
 // STATE VARIABLES
 int leftS = 0; 
 int rightS = 0;
-int enemyPosition = NONE;
 int distanceNow[4] = {0, 0, 0, 0};
 int distanceBefore[4] = {0, 0, 0, 0};
 unsigned long consistency[4] = {0, 0, 0, 0}; 
+int enemyPosition;
 
 // UTILS
 int i;
+
 void copy(int* src, int* dst, int len) {
     memcpy(dst, src, sizeof(src[0])*len);
 }
+
+int max_index(unsigned long *a, int n)
+    {
+        if(n <= 0) return -1;
+        int i, max_i = 0;
+        float maxvalue = a[0];
+        for(i = 1; i < n; ++i){
+            if(a[i] > maxvalue){
+                maxvalue = a[i];
+                max_i = i;
+            }
+        }
+        if(maxvalue < CONSISTENCY_THRESHOLD)
+          return -1;
+        return max_i;
+    }
 
 // SETUP FUNCTIONS
 void motorsSetup() {
@@ -144,27 +166,36 @@ bool cnySeesWhite(uint8_t CNY) {
 
 void updateDistances(){
   copy(distanceNow, distanceBefore, 4);
+
+//  median_L.addValue(sharp_L.getDistance());
+//  median_FL.addValue(sharp_FL.getDistance());
+//  median_FR.addValue(sharp_FR.getDistance());
+//  median_R.addValue(sharp_R.getDistance());
   
-  distanceNow[0] = sharp_L.getDist();
-  distanceNow[1] = sharp_FL.getDist();
-  distanceNow[2] = sharp_FR.getDist();
-  distanceNow[3] = sharp_R.getDist();
+//  distanceNow[0] = median_L.getMedian();
+//  distanceNow[1] = median_FL.getMedian();
+//  distanceNow[2] = median_FR.getMedian();
+//  distanceNow[3] = median_R.getMedian();
+
+  distanceNow[0] = sharp_L.getDistance();
+  distanceNow[1] = sharp_FL.getDistance();
+  distanceNow[2] = sharp_FR.getDistance();
+  distanceNow[3] = sharp_R.getDistance();
 
     // Consistency update
-//  for(i = 0; i < 4; i++){
-//    if(distanceNow[i] < SEEN
-//    && distanceNow[i] < distanceBefore[i] + CONSISTENT_DISTANCE_DIFFERENCE
-//    && distanceNow[i] > distanceBefore[i] - CONSISTENT_DISTANCE_DIFFERENCE)
-//      consistency[i] += 1;
-//    else
-//      consistency[i] = 0;
-//  }
+  for(i = 0; i < 4; i++){
+    if(distanceNow[i] < SEEN)
+      consistency[i] += 1;
+    else
+      consistency[i] = 0;
+  }
 }
 
 int timer;
 // SETUP
 void setup() {
   // Setups
+  enemyPosition = RIGHT;
   Serial.begin(9600);
   pinMode(LED, OUTPUT);
   pinMode(BUTTON, INPUT_PULLUP);
@@ -193,92 +224,110 @@ for(i = 0; i < 4; i++){
   Serial.print(" - ");
   
   for(i = 0; i < 4; i++){
-    Serial.print(distanceNow[i] > 400 || distanceNow[i] < 200);
+    Serial.print(distanceNow[i] < 78);
     Serial.print(" ");
   }
+
+  Serial.print(" - ");
+
+  for(i = 0; i < 4; i++){
+    Serial.print(consistency[i]);
+    Serial.print(" ");
+  }
+
+  Serial.print(" - ");
+
+  Serial.print(max_index(consistency, 4));
 }
 
 bool seen = false;
+int best_read;
+bool charge = false;
+long sharp_disable = 0;
+unsigned long elapsed = 0;
 // LOOP
 void loop() {
   checkIR();
   updateDistances();
   printConsistency();
-  Serial.println("");
-
-//  seen = false;
-//  if(leftS > 0 && rightS > 0 && (cnySeesWhite(CNY_FL) || cnySeesWhite(CNY_FR))){
-//    setMotorsSpeed(-100, -100);
-//    Serial.println("CNY1");
-//  }else if(leftS < 0 && rightS < 0 && (cnySeesWhite(CNY_BL) || cnySeesWhite(CNY_BR))){
-//    setMotorsSpeed(100, 100);
-//    Serial.println("CNY2");
-//  }else if(distanceNow[2] < SEEN && consistency[2] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(0, 0);
-//    seen = true;
-//    enemyPosition = NONE;
-//    Serial.println("F->Me quedo quieto y reseteo su posición");
-//  }else if(distanceNow[1] < NEAR && consistency[1] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
-//    enemyPosition = LEFT;
-//    Serial.println("FI c->Giro hacia allí y posicion = izquierda");
-//  }else if(distanceNow[1] < FAR && consistency[1] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED*0.75, TOP_SPEED*0.75);
-//    enemyPosition = LEFT;
-//    Serial.println("FI m->Giro hacia allí y posición = izquierda");
-//  }else if(distanceNow[1] < SEEN && consistency[1] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED/2, TOP_SPEED/2);
-//    enemyPosition = LEFT;
-//    Serial.println("FI l->Giro hacia allí y posición izquierda");
-//  }else if(distanceNow[3] < NEAR && consistency[3] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
-//    enemyPosition = RIGHT;
-//    Serial.println("FD c->Giro hacia allí y posición derecha");
-//  }else if(distanceNow[3] < FAR && consistency[3] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED*0.75, -TOP_SPEED*0.75);
-//    enemyPosition = RIGHT;
-//    Serial.println("FD m->Giro hacia allí y posición derecha");
-//  }else if(distanceNow[3] < SEEN && consistency[3] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED/2, -TOP_SPEED/2);
-//    enemyPosition = RIGHT;
-//    Serial.println("FD l->Giro hacia allí y posición derecha");
-//  }else if(distanceNow[4] < NEAR && consistency[4] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
-//    enemyPosition = RIGHT;
-//    Serial.println("D  c->Giro hacia allí y posición derecha");
-//  }else if(distanceNow[4] < FAR && consistency[4] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
-//    enemyPosition = RIGHT;
-//    Serial.println("D  m->giro hacia allí y posición derecha");
-//  }else if(distanceNow[4] < SEEN && consistency[4] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
-//    enemyPosition = RIGHT;
-//    Serial.println("D  l->Giro hacia allí y posición derecha");
-//  }else if(distanceNow[0] < NEAR && consistency[0] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
-//    enemyPosition = LEFT;
-//    Serial.println("I  c->Giro hacia allí y posición izquierda");
-//  }else if(distanceNow[0] < FAR && consistency[0] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
-//    enemyPosition = LEFT;
-//    Serial.println("I  m->Giro hacia allí y posición izquierda");
-//  }else if(distanceNow[0] < SEEN && consistency[0] > CONSISTENCY_THRESHOLD){
-//    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
-//    enemyPosition = LEFT;
-//    Serial.println("I  l->Giro hacia allí y posición izquierda");
-//  }else if(enemyPosition == RIGHT){
-//    setMotorsSpeed(TOP_SPEED, -TOP_SPEED);
-//    Serial.println("XD->Giro hacia allí");
-//  }else if(enemyPosition == LEFT){
-//    setMotorsSpeed(-TOP_SPEED, TOP_SPEED);
-//    Serial.println("XI->Giro hacia allí");
-//  }else{
-//    Serial.println("No veo nada y no sé donde está->No cambio nada");
-//  }
-//
-//  if(seen){
-//    digitalWrite(LED, HIGH);
-//  }else{
-//    digitalWrite(LED, LOW);
-//  }
+  Serial.print(" - ");
+  Serial.println(enemyPosition);
+  best_read = max_index(consistency, 4);
+  elapsed = millis() - timer;
+  timer = millis();
+  seen = false;
+  if(leftS > 0 && rightS > 0 && cnySeesWhite(CNY_FL)){
+    setMotorsSpeed(-100, -210);
+    sharp_disable = 400;
+    charge = false;
+    enemyPosition = RIGHT;
+  }else if(leftS > 0 && rightS > 0 && cnySeesWhite(CNY_FR)){
+    setMotorsSpeed(-210, -100);
+    charge = false;
+    sharp_disable = 400;
+    enemyPosition = LEFT;
+  }else if(leftS > 0 && rightS > 0 && (cnySeesWhite(CNY_BL) || cnySeesWhite(CNY_BR))){
+    setMotorsSpeed(210, 210);
+    charge = false;
+  }else if(leftS < 0 && rightS < 0 && cnySeesWhite(CNY_BL)){
+    setMotorsSpeed(210, 100);
+    charge = false;
+    sharp_disable = 400;
+    enemyPosition = LEFT;
+  }else if(leftS < 0 && rightS < 0 && cnySeesWhite(CNY_BR)){
+    setMotorsSpeed(100, 210);
+    charge = false;
+    sharp_disable = 400;
+    enemyPosition = RIGHT;
+  }else if(leftS < 0 && rightS < 0 && (cnySeesWhite(CNY_FL) || cnySeesWhite(CNY_FR))){
+    setMotorsSpeed(-200, -200);
+    charge = false;
+  }else if(sharp_disable > 0){
+    sharp_disable -= elapsed;
+  }else if(charge){
+    if(consistency[1] > 1 && consistency[2] > 1){
+      enemyPosition = FRONT;
+      setMotorsSpeed(210, 210);
+    }else if(consistency[1] > 1 && consistency[2] < 1){
+      setMotorsSpeed(100, 210);
+      enemyPosition = LEFT;
+    }else if(consistency[2] > 1 && consistency[1] < 1){
+      setMotorsSpeed(210, 100);
+      enemyPosition = RIGHT;
+    }else if(enemyPosition == LEFT){
+      setMotorsSpeed(100, 210);
+    }else if(enemyPosition == RIGHT){
+      setMotorsSpeed(210, 100);
+    }else{
+      setMotorsSpeed(210, 210);
+    }
+  }else if(consistency[1] > 2 && consistency[2] > 2){
+    setMotorsSpeed(210, 210);
+    charge = true;
+    enemyPosition = FRONT;
+  }else if(consistency[1] > 2){
+    setMotorsSpeed(100, 210);
+    charge = true;
+    enemyPosition = LEFT;
+  }else if(consistency[2] > 2){
+    setMotorsSpeed(210, 100);
+    charge = true;
+    enemyPosition = RIGHT;
+  }else if(consistency[0] > 3 && consistency[0] > consistency[3]){
+    setMotorsSpeed(-200, 200);
+    enemyPosition = LEFT;
+  }else if(consistency[3] > 3){
+    setMotorsSpeed(200, -200);
+    enemyPosition = RIGHT;
+  }else if(enemyPosition == RIGHT){
+    setMotorsSpeed(200, -200);
+  }else if(enemyPosition == LEFT){
+    setMotorsSpeed(-200, 200);
+  }
+  
+  if(seen){
+    digitalWrite(LED, HIGH);
+  }else{
+    digitalWrite(LED, LOW);
+  }
 }
