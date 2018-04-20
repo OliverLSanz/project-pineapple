@@ -208,7 +208,7 @@ void setup() {
     delay(10);
   }
   digitalWrite(LED, LOW); 
-  delay(1000);
+  delay(5000);
 
   // INITIAL STATE
   setMotorsSpeed(0, 0);
